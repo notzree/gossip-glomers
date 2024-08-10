@@ -16,6 +16,7 @@ func main() {
 		StorageMutex:    &sync.Mutex{},
 		Storage:         make(map[string]int),
 		TopologyStorage: make([]string, 0),
+		BroadcastQueue:  make([]handlers.BroadcastBody, 0),
 	}
 
 	// Start Echo workload

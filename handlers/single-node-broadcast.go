@@ -37,8 +37,16 @@ func (h *Handler) Broadcast(msg maelstrom.Message) error {
 			Message:   message,
 			MessageId: &messageId,
 		}
-		if err := h.Node.RPC(node, newBody, func(_ maelstrom.Message) error { return nil }); err != nil {
-			return err
+		h.BroadcastQueue = append(h.BroadcastQueue, newBody)
+		for _, broadcastBody := range h.BroadcastQueue {
+			if err := h.Node.RPC(node, broadcastBody, func(_ maelstrom.Message) error {
+				return nil
+			}); err != nil {
+				continue
+				// return err //maybe want to do nothing?
+			}
+			// broadcasted successfully, remove from queue
+			h.BroadcastQueue = h.BroadcastQueue[1:]
 		}
 	}
 	responseBody := map[string]any{
