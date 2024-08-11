@@ -15,7 +15,7 @@ func main() {
 		Storage:         make(map[int]struct{}),
 		TopologyMutex:   &sync.Mutex{},
 		TopologyStorage: make(map[string][]string),
-		Ttl:             5,
+		Ttl:             3,
 	}
 	n.Handle("broadcast", h.Broadcast)
 	n.Handle("read", h.Read)
