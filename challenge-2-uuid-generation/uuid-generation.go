@@ -1,4 +1,4 @@
-package handlers
+package main
 
 import (
 	"encoding/json"
@@ -6,6 +6,10 @@ import (
 	"github.com/google/uuid"
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
+
+type Handler struct {
+	Node *maelstrom.Node
+}
 
 func (h *Handler) GenerateUuid(msg maelstrom.Message) error {
 	var body map[string]any

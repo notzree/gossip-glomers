@@ -1,6 +1,6 @@
-module github.com/notzree/gossip-glomers/v2
+module github.com/notzree/gossip-glomers/uuid-generation/v2
 
-go 1.22.5
+go 1.22.6
 
 require (
 	github.com/google/uuid v1.6.0

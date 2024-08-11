@@ -1,4 +1,4 @@
-package handlers
+package main
 
 type MaelstromMessage struct {
 	Src  string `json:"src"`
