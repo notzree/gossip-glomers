@@ -5,5 +5,5 @@ cwd=$(pwd)
 
 go build -o bin
 cd "$maelstrom_path" || exit
-./maelstrom test -w broadcast --bin $cwd/bin --node-count 25 --time-limit 20 --rate 100 --latency 100
+./maelstrom test -w broadcast --bin $cwd/bin --node-count 5 --time-limit 20 --rate 10
 cd "$cwd" || exit
