@@ -18,4 +18,5 @@ type BroadcastBody struct {
 	Type      string  `json:"type"`
 	Message   int     `json:"message"`
 	MessageId *string `json:"message_id,omitempty"`
+	Ttl       *int    `json:"ttl,omitempty"`
 }

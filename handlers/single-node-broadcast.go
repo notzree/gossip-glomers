@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
@@ -12,6 +13,13 @@ func (h *Handler) Broadcast(msg maelstrom.Message) error {
 	if err := json.Unmarshal(msg.Body, &body); err != nil {
 		return err
 	}
+	responseBody := map[string]any{
+		"type": "broadcast_ok",
+	}
+	err := h.Node.Reply(msg, responseBody)
+	if err != nil {
+		return err
+	}
 	h.StorageMutex.Lock()
 	defer h.StorageMutex.Unlock()
 	// Message was broadcasted before and already stored
@@ -20,7 +28,11 @@ func (h *Handler) Broadcast(msg maelstrom.Message) error {
 			return nil
 		}
 	}
-	// Message was not broadcasted before, or was broadcasted but not stored
+	// Message has expired (only re-broadcasted messages have TTL)
+	if body.Ttl != nil && *body.Ttl <= 0 {
+		return nil
+	}
+	// First time receiving message, either messsage from another node or new broadcast
 	var messageId string
 	if body.MessageId == nil {
 		messageId = uuid.New().String()
@@ -29,30 +41,35 @@ func (h *Handler) Broadcast(msg maelstrom.Message) error {
 	}
 	message := body.Message
 	h.Storage[messageId] = message
+	//message to broadcast to neighbouring nodes
+	updatedTtl := h.Ttl - 1
+	broadcast := BroadcastBody{
+		Type:      "broadcast",
+		Message:   message,
+		MessageId: &messageId,
+		Ttl:       &updatedTtl,
+	}
 
-	//broadcast to neighbouring nodes
 	for _, node := range h.TopologyStorage {
-		newBody := BroadcastBody{
-			Type:      "broadcast",
-			Message:   message,
-			MessageId: &messageId,
+		if msg.Src == node {
+			continue
 		}
-		h.BroadcastQueue = append(h.BroadcastQueue, newBody)
-		for _, broadcastBody := range h.BroadcastQueue {
-			if err := h.Node.RPC(node, broadcastBody, func(_ maelstrom.Message) error {
-				return nil
-			}); err != nil {
-				continue
-				// return err //maybe want to do nothing?
+		// if rand.Float64() > 0.8 { // probabilistic gossip
+		// 	continue
+		// }
+		//For each node,  we will start a goroutine to try to broadcast that message
+		go func(node string, broadcast BroadcastBody) {
+			for {
+				if err := h.Node.RPC(node, broadcast, func(_ maelstrom.Message) error {
+					return nil
+				}); err == nil {
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
 			}
-			// broadcasted successfully, remove from queue
-			h.BroadcastQueue = h.BroadcastQueue[1:]
-		}
+		}(node, broadcast)
 	}
-	responseBody := map[string]any{
-		"type": "broadcast_ok",
-	}
-	return h.Node.Reply(msg, responseBody)
+	return nil
 }
 
 func (h *Handler) Read(msg maelstrom.Message) error {
@@ -87,4 +104,8 @@ func (h *Handler) Topology(msg maelstrom.Message) error {
 	}
 
 	return h.Node.Reply(msg, new_body)
+}
+
+func remove(slice []int, i int) []int {
+	return append(slice[:i], slice[i+1:]...)
 }

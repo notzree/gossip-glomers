@@ -10,6 +10,6 @@ type Handler struct {
 	Node            *maelstrom.Node
 	StorageMutex    *sync.Mutex
 	Storage         map[string]int
-	BroadcastQueue  []BroadcastBody
 	TopologyStorage []string
+	Ttl             int
 }

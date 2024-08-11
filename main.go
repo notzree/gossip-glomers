@@ -16,7 +16,7 @@ func main() {
 		StorageMutex:    &sync.Mutex{},
 		Storage:         make(map[string]int),
 		TopologyStorage: make([]string, 0),
-		BroadcastQueue:  make([]handlers.BroadcastBody, 0),
+		Ttl:             3,
 	}
 
 	// Start Echo workload
@@ -38,7 +38,6 @@ func main() {
 	// Start UUID Generation workload
 	n.Handle("generate", h.GenerateUuid)
 	// End UUID Generation workload
-
 	// Start Broadcast workload (#3A and 3B)
 	// Note: Guaranteed that topology is the first message received after init
 	n.Handle("broadcast", h.Broadcast)
