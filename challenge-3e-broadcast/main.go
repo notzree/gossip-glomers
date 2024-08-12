@@ -16,7 +16,10 @@ func main() {
 		TopologyMutex:   &sync.Mutex{},
 		TopologyStorage: make(map[string][]string),
 		Ttl:             2,
+		BroadcastQueue:  make(map[string][]int),
+		BroadcastMutex:  sync.Mutex{},
 	}
+	go h.BatchBroadcast()
 	n.Handle("broadcast", h.Broadcast)
 	n.Handle("read", h.Read)
 	n.Handle("topology", h.Topology)

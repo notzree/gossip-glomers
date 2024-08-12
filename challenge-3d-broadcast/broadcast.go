@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -72,7 +71,7 @@ func (h *Handler) Broadcast(msg maelstrom.Message) error {
 }
 
 func (h *Handler) Read(msg maelstrom.Message) error {
-	var body Readbody
+	var body map[string]any
 	if err := json.Unmarshal(msg.Body, &body); err != nil {
 		return err
 	}
