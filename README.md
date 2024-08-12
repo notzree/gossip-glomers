@@ -45,10 +45,12 @@ Challenge requirements:
 - Message per op under 30
 - Median latency under 400ms
 -  Maximum latency under 600ms
+
+
 My results:
 - Message per op: 24
-- Median latency: 175
-- Maximum latency: 208
+- Median latency: 175ms
+- Maximum latency: 208ms
 
 
 ## [Challege 3e] Efficient Broadcast 2
@@ -61,6 +63,7 @@ Challenge requirements:
 - Message per op under 20
 - Median latency under 1000ms
 -  Maximum latency under 2000ms
+
 My results:
 - Message per op: 2
 - Median latency: 462ms
