@@ -28,6 +28,8 @@ func (h *Handler) Broadcast(msg maelstrom.Message) error {
 	h.StorageMutex.Lock()
 	defer h.StorageMutex.Unlock()
 	if _, exists := h.Storage[message]; exists || body["ttl"] != nil && to_i(body["ttl"]) <= 0 {
+		// log the message and ttl
+		ttl := to_i(body["ttl"])
 		return nil
 	}
 	go func() {
@@ -102,6 +104,7 @@ func (h *Handler) Topology(msg maelstrom.Message) error {
 		tree[fmt.Sprintf("n%d", 0)] = append(tree[fmt.Sprintf("n%d", 0)], fmt.Sprintf("n%d", id))  // Add all nodes to the root node
 		tree[fmt.Sprintf("n%d", id)] = append(tree[fmt.Sprintf("n%d", id)], fmt.Sprintf("n%d", 0)) // Add the root node to all nodes
 	}
+	log.Println("Topology", tree[h.Node.ID()])
 	h.TopologyMutex.Lock()
 	defer h.TopologyMutex.Unlock()
 	h.TopologyStorage = tree
