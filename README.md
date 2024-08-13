@@ -68,3 +68,9 @@ My results:
 - Message per op: 2
 - Median latency: 462ms
 - Maximum latency: 1037ms
+
+
+## [Challenge 4] Grow only counter
+[4 solution](https://github.com/notzree/gossip-glomers/blob/main/challenge-4-grow-only-counter/) \
+
+
