@@ -77,7 +77,7 @@ func (c *Counter) Read(msg maelstrom.Message) error {
 	if err := json.Unmarshal(msg.Body, &body); err != nil {
 		return err
 	}
-
+	wg := &sync.WaitGroup{}
 	value := 0
 	nodes := c.Node.NodeIDs()
 	for _, node := range nodes {
@@ -90,7 +90,9 @@ func (c *Counter) Read(msg maelstrom.Message) error {
 				return err
 			}
 			value += localValue
+			continue
 		}
+		wg.Add(1)
 		_ = c.Node.RPC(node, map[string]any{
 			"type": "sync",
 		}, func(msg maelstrom.Message) error {
@@ -99,9 +101,11 @@ func (c *Counter) Read(msg maelstrom.Message) error {
 				return err
 			}
 			value += int(body["value"].(float64))
+			wg.Done()
 			return nil
 		})
 	}
+	wg.Wait()
 	return c.Node.Reply(msg, map[string]any{
 		"type":  "read_ok",
 		"value": value,
@@ -115,10 +119,10 @@ func (c *Counter) Sync(msg maelstrom.Message) error {
 		return err
 	}
 	c.KvMutex.Lock()
-	defer c.KvMutex.Unlock()
 	readCtx, readCancel := context.WithCancel(context.Background())
 	defer readCancel()
 	value, err := c.Kv.ReadInt(readCtx, c.Id)
+	c.KvMutex.Unlock()
 	if err != nil {
 		log.Printf("Error syncing node: %v", err)
 		return err
