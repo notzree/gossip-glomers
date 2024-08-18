@@ -68,3 +68,14 @@ My results:
 - Message per op: 2
 - Median latency: 462ms
 - Maximum latency: 1037ms
+
+
+## [Challenge 4] Grow only counter
+
+[4 solution](https://github.com/notzree/gossip-glomers/blob/main/challenge-4-grow-only-counter/) \
+To implement an eventually consistent grow-only counter, I implemented a synchronization-on-read approach. 
+This means that when you incremenet the counter on a node, it only incremeents it's local counter. However, when you attempt to read from a Node n1, n1 will use an rpc call to sum the values of all the local counters to create the global counter.
+
+//todo: implement with op crdt state crdt
+
+
