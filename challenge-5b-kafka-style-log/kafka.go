@@ -22,37 +22,6 @@ type Kafka struct {
 	Storage      *maelstrom.KV //shared thing that syncs between all nodes !?
 }
 
-type Option func(*string)
-
-func fmtkey(prefix string, key string, opts ...Option) string {
-	str := fmt.Sprintf("%s%s", prefix, key)
-	for _, op := range opts {
-		op(&str)
-	}
-	return str
-}
-
-func WithOffset(offset int) Option {
-	return func(str *string) {
-		*str = fmt.Sprintf("%s_%d", *str, offset)
-	}
-}
-
-func PrettyReadInt(storage *maelstrom.KV, key string) (int, error) {
-	readContext, readCancel := context.WithCancel(context.Background())
-	defer readCancel()
-	value, err := storage.ReadInt(readContext, key)
-	if err != nil {
-		return -1, err
-	}
-	return value, nil
-}
-func PrettyWriteInt(storage *maelstrom.KV, key string, value int) error {
-	writeContext, writeCancel := context.WithCancel(context.Background())
-	defer writeCancel()
-	return storage.Write(writeContext, key, value)
-}
-
 func (k *Kafka) Send(msg maelstrom.Message) error {
 	var body map[string]any
 	if err := json.Unmarshal(msg.Body, &body); err != nil {
@@ -191,5 +160,35 @@ func (k *Kafka) ListCommittedOffsets(msg maelstrom.Message) error {
 		"type":    "list_committed_offsets_ok",
 		"offsets": offsets,
 	})
+}
 
+type Option func(*string)
+
+func fmtkey(prefix string, key string, opts ...Option) string {
+	str := fmt.Sprintf("%s%s", prefix, key)
+	for _, op := range opts {
+		op(&str)
+	}
+	return str
+}
+
+func WithOffset(offset int) Option {
+	return func(str *string) {
+		*str = fmt.Sprintf("%s_%d", *str, offset)
+	}
+}
+
+func PrettyReadInt(storage *maelstrom.KV, key string) (int, error) {
+	readContext, readCancel := context.WithCancel(context.Background())
+	defer readCancel()
+	value, err := storage.ReadInt(readContext, key)
+	if err != nil {
+		return -1, err
+	}
+	return value, nil
+}
+func PrettyWriteInt(storage *maelstrom.KV, key string, value int) error {
+	writeContext, writeCancel := context.WithCancel(context.Background())
+	defer writeCancel()
+	return storage.Write(writeContext, key, value)
 }
