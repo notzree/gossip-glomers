@@ -1,4 +1,4 @@
-module github.com/notzree/gossip-glomers/5a-kafka-style-log
+module github.com/notzree/gossip-glomers/5b-kafka-style-log
 
 go 1.22
 
