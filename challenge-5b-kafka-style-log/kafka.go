@@ -33,7 +33,7 @@ func (k *Kafka) Send(msg maelstrom.Message) error {
 	defer k.StorageMutex.Unlock()
 	latestOffset, err := PrettyReadInt(k.Storage, fmtkey(latestPrefix, key))
 	if err != nil {
-		latestOffset = 0
+		latestOffset = 1
 	}
 	//Read the most recent log, now we have to ensure that no other nodes are using the log
 	for ; ; latestOffset++ {
