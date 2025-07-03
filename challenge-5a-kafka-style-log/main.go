@@ -2,22 +2,17 @@ package main
 
 import (
 	"log"
-	"sync"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
 func main() {
 	n := maelstrom.NewNode()
-	kafka := &Kafka{
-		Node:         n,
-		StorageMutex: &sync.Mutex{},
-		Storage:      make(map[string]*LogContainer),
-	}
-	n.Handle("send", kafka.Send)
-	n.Handle("poll", kafka.Poll)
-	n.Handle("commit_offsets", kafka.CommitOffsets)
-	n.Handle("list_committed_offsets", kafka.ListCommittedOffsets)
+	kafka := NewKafka(n)
+	n.Handle("send", kafka.SendRPC)
+	n.Handle("poll", kafka.PollRPC)
+	n.Handle("commit_offsets", kafka.CommitOffsetsRPC)
+	n.Handle("list_committed_offsets", kafka.ListCommittedOffsetsRPC)
 	if err := n.Run(); err != nil {
 		log.Fatal(err)
 	}

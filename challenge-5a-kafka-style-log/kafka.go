@@ -2,155 +2,156 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"sync"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
 type Kafka struct {
-	Node         *maelstrom.Node
-	StorageMutex *sync.Mutex
-	Storage      map[string]*LogContainer
+	Node    *maelstrom.Node
+	KvMutex *sync.RWMutex
+	Kv      map[string]*Log
 }
 
-type LogContainer struct {
-	LastCreatedOffset   int
-	LastProcessedOffset int
-	Logs                []int
+type Log struct {
+	LastCommitedOffset int
+	LastOffset         int
+	Logs               []int
 }
 
-func (l *LogContainer) AddLog(value int) {
+func NewLog() *Log {
+	return &Log{
+		LastCommitedOffset: -1,
+		LastOffset:         -1,
+		Logs:               make([]int, 0),
+	}
+}
+func (l *Log) AddLog(value int) int {
 	l.Logs = append(l.Logs, value)
-	newOffset := l.LastCreatedOffset + 1
-	l.LastCreatedOffset = newOffset
+	l.LastOffset = l.LastOffset + 1
+	return l.LastOffset
 }
 
-func (k *Kafka) Send(msg maelstrom.Message) error {
+func NewKafka(n *maelstrom.Node) *Kafka {
+	return &Kafka{
+		Node:    n,
+		KvMutex: &sync.RWMutex{},
+		Kv:      make(map[string]*Log),
+	}
+}
+
+func (kafka Kafka) SendRPC(rawMsg maelstrom.Message) error {
 	var body map[string]any
-	if err := json.Unmarshal(msg.Body, &body); err != nil {
+	if err := json.Unmarshal(rawMsg.Body, &body); err != nil {
 		return err
 	}
 	key := body["key"].(string)
-	value := int(body["msg"].(float64))
-	k.StorageMutex.Lock()
-	defer k.StorageMutex.Unlock()
-	if _, ok := k.Storage[key]; !ok {
-		k.Storage[key] = &LogContainer{
-			LastCreatedOffset:   -1,
-			LastProcessedOffset: -1,
-			Logs:                []int{},
-		}
+	msg := int(body["msg"].(float64))
+	kafka.KvMutex.Lock()
+	defer kafka.KvMutex.Unlock()
+	if _, exists := kafka.Kv[key]; !exists {
+		kafka.Kv[key] = NewLog()
 	}
-	logContainer := k.Storage[key]
-	logContainer.AddLog(value)
-	return k.Node.Reply(msg, map[string]any{
+	offset := kafka.Kv[key].AddLog(msg)
+	return kafka.Node.Reply(rawMsg, map[string]any{
 		"type":   "send_ok",
-		"offset": logContainer.LastCreatedOffset,
+		"offset": offset,
 	})
 }
 
-func (k *Kafka) Poll(msg maelstrom.Message) error {
-	var body map[string]any
-	if err := json.Unmarshal(msg.Body, &body); err != nil {
+type PollRPCBody struct {
+	Type    string         `json:"type"`
+	Offsets map[string]int `json:"offsets"`
+}
+
+func (kafka Kafka) PollRPC(rawMsg maelstrom.Message) error {
+	var body PollRPCBody
+	if err := json.Unmarshal(rawMsg.Body, &body); err != nil {
 		return err
 	}
-	offsets := make(map[string]int)
-	if offsetsData, ok := body["offsets"].(map[string]interface{}); ok {
-		for key, val := range offsetsData {
-			offsets[key] = int(val.(float64))
-		}
-	}
-
-	k.StorageMutex.Lock()
-	defer k.StorageMutex.Unlock()
-
-	messages := make(map[string][][2]int)
-	for key, startingOffset := range offsets {
-		if _, exists := k.Storage[key]; !exists {
+	kafka.KvMutex.RLock()
+	defer kafka.KvMutex.RUnlock()
+	logs := make(map[string][][2]int)
+	for key, start := range body.Offsets {
+		if _, exists := kafka.Kv[key]; !exists {
+			// return errors.New("invalid key")
 			continue
 		}
-		logContainer := k.Storage[key]
-		if startingOffset >= len(logContainer.Logs) {
+		LogsPointer := kafka.Kv[key]
+		if start >= len(LogsPointer.Logs) {
+			// return errors.New("start offset does not exist")
 			continue
 		}
-
-		keyedMessages := make([][2]int, 0, len(logContainer.Logs))
-
-		for index := startingOffset; index < len(logContainer.Logs); index += 1 {
-			value := logContainer.Logs[index]
-			offsetValuePair := [2]int{index, value}
-			keyedMessages = append(keyedMessages, offsetValuePair)
+		// lets just return all messages
+		keyMessages := make([][2]int, len(LogsPointer.Logs)-start)
+		for i := start; i < len(LogsPointer.Logs); i += 1 {
+			value := LogsPointer.Logs[i]
+			keyMessages[i-start] = [2]int{i, value}
 		}
-		messages[key] = keyedMessages
+		logs[key] = keyMessages
 	}
-	return k.Node.Reply(msg, map[string]any{
-		"type": "poll_ok",
-		"msgs": messages,
+	return kafka.Node.Reply(
+		rawMsg, map[string]any{
+			"type": "poll_ok",
+			"msgs": logs,
+		},
+	)
+}
+
+type CommitOffsetsRPCBody struct {
+	Type    string         `json:"type"`
+	Offsets map[string]int `json:"offsets"`
+}
+
+func (kafka Kafka) CommitOffsetsRPC(rawMsg maelstrom.Message) error {
+	var body CommitOffsetsRPCBody
+	if err := json.Unmarshal(rawMsg.Body, &body); err != nil {
+		return err
+	}
+	kafka.KvMutex.Lock()
+	defer kafka.KvMutex.Unlock()
+	for key, commitedOffset := range body.Offsets {
+		if _, exists := kafka.Kv[key]; !exists {
+			continue
+		}
+		LogsPointer := kafka.Kv[key]
+		if LogsPointer.LastCommitedOffset > commitedOffset {
+			continue
+		}
+		LogsPointer.LastCommitedOffset = commitedOffset
+
+	}
+	return kafka.Node.Reply(rawMsg, map[string]any{
+		"type": "commit_offsets_ok",
 	})
+
 }
 
-func (k *Kafka) CommitOffsets(msg maelstrom.Message) error {
-	var body map[string]any
-	if err := json.Unmarshal(msg.Body, &body); err != nil {
-		return err
-	}
-	go func() {
-		k.Node.Reply(msg, map[string]any{
-			"type": "commit_offsets_ok",
-		})
-	}()
-
-	offsets := make(map[string]int)
-	if offsetsData, ok := body["offsets"].(map[string]interface{}); ok {
-		for key, val := range offsetsData {
-			offsets[key] = int(val.(float64))
-		}
-	}
-	k.StorageMutex.Lock()
-	defer k.StorageMutex.Unlock()
-	for key, offset := range offsets {
-		if _, exists := k.Storage[key]; !exists {
-			continue
-		}
-		k.Storage[key].LastProcessedOffset = offset
-	}
-	return nil
+type ListCommitedOffsetsRPCBody struct {
+	Type string   `json:"type"`
+	Keys []string `json:"keys"`
 }
 
-func (k *Kafka) ListCommittedOffsets(msg maelstrom.Message) error {
-	var body map[string]any
-	if err := json.Unmarshal(msg.Body, &body); err != nil {
+func (kafka Kafka) ListCommittedOffsetsRPC(rawMsg maelstrom.Message) error {
+	var body ListCommitedOffsetsRPCBody
+	if err := json.Unmarshal(rawMsg.Body, &body); err != nil {
 		return err
 	}
-	keys := make([]string, 0)
-	if keyData, ok := body["keys"].([]interface{}); ok {
-		for _, key := range keyData {
-			if keyStr, ok := key.(string); ok {
-				keys = append(keys, keyStr)
-			} else {
-				return fmt.Errorf("invalid key type")
-			}
-		}
-	} else {
-		return fmt.Errorf("keys field not found or of wrong type")
-	}
-	offsets := make(map[string]int)
-	k.StorageMutex.Lock()
-	defer k.StorageMutex.Unlock()
-	for _, key := range keys {
-		if _, exists := k.Storage[key]; !exists {
+	keyedOffsets := make(map[string]int)
+	kafka.KvMutex.RLock()
+	defer kafka.KvMutex.RUnlock()
+	for _, key := range body.Keys {
+		if _, exists := kafka.Kv[key]; !exists {
 			continue
 		}
-		if k.Storage[key].LastProcessedOffset < 0 {
-			// has not been set
+		if kafka.Kv[key].LastCommitedOffset < 0 {
 			continue
 		}
-		offsets[key] = k.Storage[key].LastProcessedOffset
+
+		keyedOffsets[key] = kafka.Kv[key].LastCommitedOffset
 	}
-	return k.Node.Reply(msg, map[string]any{
+	return kafka.Node.Reply(rawMsg, map[string]any{
 		"type":    "list_committed_offsets_ok",
-		"offsets": offsets,
+		"offsets": keyedOffsets,
 	})
-
 }
