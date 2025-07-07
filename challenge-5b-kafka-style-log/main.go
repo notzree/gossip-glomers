@@ -12,13 +12,13 @@ func main() {
 	kv := maelstrom.NewLinKV(n)
 	kafka := &Kafka{
 		Node:         n,
-		StorageMutex: &sync.Mutex{},
+		StorageMutex: &sync.RWMutex{},
 		Storage:      kv,
 	}
-	n.Handle("send", kafka.Send)
-	n.Handle("poll", kafka.Poll)
-	n.Handle("commit_offsets", kafka.CommitOffsets)
-	n.Handle("list_committed_offsets", kafka.ListCommittedOffsets)
+	n.Handle("send", kafka.SendRPC)
+	n.Handle("poll", kafka.PollRPC)
+	n.Handle("commit_offsets", kafka.CommitOffsetsRPC)
+	n.Handle("list_committed_offsets", kafka.ListCommittedOffsetsRPC)
 	if err := n.Run(); err != nil {
 		log.Fatal(err)
 	}

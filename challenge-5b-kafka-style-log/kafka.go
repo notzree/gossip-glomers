@@ -4,161 +4,150 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sync"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
 const (
-	commitPrefix = "commit_"
-	latestPrefix = "latest_" //latestPrefix_key stores the latest offset for a key (represents the latest)
-	logPrefix    = "log_"    // logPrefix_key stores all the logs related to a key (array of ints)
+	latestPrefix = "latest_" // stores latest log
+	commitPrefix = "commit_" //stores latest committed log
+	logPrefix    = "log_"    // stores the actual logs
 )
 
 type Kafka struct {
 	Node         *maelstrom.Node
-	StorageMutex *sync.Mutex
+	StorageMutex *sync.RWMutex
 	Storage      *maelstrom.KV //shared thing that syncs between all nodes !?
 }
 
-func (k *Kafka) Send(msg maelstrom.Message) error {
+func NewKafka(n *maelstrom.Node) *Kafka {
+	return &Kafka{
+		Node:         n,
+		StorageMutex: &sync.RWMutex{},
+		// Linearizable KV
+		// makes sure every node agrees on order of operation + all on the same time frame
+		Storage: maelstrom.NewLinKV(n),
+	}
+}
+
+func (kafka Kafka) SendRPC(rawMsg maelstrom.Message) error {
 	var body map[string]any
-	if err := json.Unmarshal(msg.Body, &body); err != nil {
+	if err := json.Unmarshal(rawMsg.Body, &body); err != nil {
 		return err
 	}
 	key := body["key"].(string)
-	value := int(body["msg"].(float64))
-	k.StorageMutex.Lock()
-	defer k.StorageMutex.Unlock()
-	latestOffset, err := PrettyReadInt(k.Storage, fmtkey(latestPrefix, key))
+	msg := int(body["msg"].(float64))
+	kafka.StorageMutex.Lock()
+	defer kafka.StorageMutex.Unlock()
+	latestOffset, err := PrettyReadInt(kafka.Storage, fmtkey(latestPrefix, key))
 	if err != nil {
 		latestOffset = 1
 	}
-	//Read the most recent log, now we have to ensure that no other nodes are using the log
+	// acquire "lock" on log
+	// distributed counter ensuring that if multiple nodes contest the write, each node will end up with a uniquely assigned
+	// offset value with no conflicts
 	for ; ; latestOffset++ {
-		if err := k.Storage.CompareAndSwap(context.Background(),
-			fmtkey(latestPrefix, key), latestOffset-1, latestOffset, true,
-		); err != nil {
-			log.Printf("cas retry: %v", err)
+		err := kafka.Storage.CompareAndSwap(context.Background(), fmtkey(latestPrefix, key), latestOffset-1, latestOffset, true)
+		if err != nil {
 			continue
 		}
 		break
 	}
-	// At this point we have updated the logOffset with logOffset. This means that we can safely write with it.
+	// now our node can write to the log prefix with the offset latestOffset (we own this, and no other node can write to it due to cas loop)
 	go func() {
-		k.Node.Reply(msg, map[string]any{
+		kafka.Node.Reply(rawMsg, map[string]any{
 			"type":   "send_ok",
 			"offset": latestOffset,
 		})
 	}()
-	return PrettyWriteInt(k.Storage, fmtkey(logPrefix, key, WithOffset(latestOffset)), value)
+	return PrettyWriteInt(kafka.Storage, fmtkey(logPrefix, key, WithOffset(latestOffset)), msg)
 }
 
-func (k *Kafka) Poll(msg maelstrom.Message) error {
-	var body map[string]any
-	if err := json.Unmarshal(msg.Body, &body); err != nil {
+type PollRPCBody struct {
+	Type    string         `json:"type"`
+	Offsets map[string]int `json:"offsets"`
+}
+
+func (kafka Kafka) PollRPC(rawMsg maelstrom.Message) error {
+	var body PollRPCBody
+	if err := json.Unmarshal(rawMsg.Body, &body); err != nil {
 		return err
 	}
-	offsets := make(map[string]int)
-	if offsetsData, ok := body["offsets"].(map[string]interface{}); ok {
-		for key, val := range offsetsData {
-			offsets[key] = int(val.(float64))
-		}
-	}
+	kafka.StorageMutex.RLock()
+	defer kafka.StorageMutex.RUnlock()
+	logs := make(map[string][][2]int)
 
-	k.StorageMutex.Lock()
-	defer k.StorageMutex.Unlock()
-
-	messages := make(map[string][][2]int)
-	for key, startingOffset := range offsets {
-		latestOffset, err := PrettyReadInt(k.Storage, fmtkey(latestPrefix, key))
+	for key, start := range body.Offsets {
+		latestOffset, err := PrettyReadInt(kafka.Storage, fmtkey(latestPrefix, key))
 		if err != nil {
 			continue
 		}
-		//The starting offset is greater than what exists
-		if startingOffset >= latestOffset {
+		if start >= latestOffset {
 			continue
 		}
-		keyedMessages := make([][2]int, 0, latestOffset) //offset represents the number of logs there are
-		for offset := startingOffset; offset <= latestOffset; offset += 1 {
-			log, err := PrettyReadInt(k.Storage, fmtkey(logPrefix, key, WithOffset(offset)))
+		keyedMessages := make([][2]int, 0)
+		for offset := start; offset <= latestOffset; offset++ {
+			log, err := PrettyReadInt(kafka.Storage, fmtkey(logPrefix, key, WithOffset(offset)))
 			if err != nil {
-				// offset may not exist? idk actually
 				continue
 			}
-			offsetValuePair := [2]int{offset, log}
-			keyedMessages = append(keyedMessages, offsetValuePair)
+			keyedMessages = append(keyedMessages, [2]int{offset, log})
 		}
-		messages[key] = keyedMessages
+		logs[key] = keyedMessages
 	}
-	return k.Node.Reply(msg, map[string]any{
+	return kafka.Node.Reply(rawMsg, map[string]any{
 		"type": "poll_ok",
-		"msgs": messages,
+		"msgs": logs,
 	})
 }
 
-func (k *Kafka) CommitOffsets(msg maelstrom.Message) error {
-	var body map[string]any
-	if err := json.Unmarshal(msg.Body, &body); err != nil {
+type CommitOffsetsRPCBody struct {
+	Type    string         `json:"type"`
+	Offsets map[string]int `json:"offsets"`
+}
+
+func (kafka Kafka) CommitOffsetsRPC(rawMsg maelstrom.Message) error {
+	var body CommitOffsetsRPCBody
+	if err := json.Unmarshal(rawMsg.Body, &body); err != nil {
 		return err
 	}
-	go func() {
-		k.Node.Reply(msg, map[string]any{
-			"type": "commit_offsets_ok",
-		})
-	}()
-
-	committedOffsets := make(map[string]int)
-	if offsetsData, ok := body["offsets"].(map[string]interface{}); ok {
-		for key, val := range offsetsData {
-			committedOffsets[key] = int(val.(float64))
-		}
-	}
-	k.StorageMutex.Lock()
-	defer k.StorageMutex.Unlock()
-
-	for key, commitedOffset := range committedOffsets {
-		err := PrettyWriteInt(k.Storage, fmtkey(commitPrefix, key), commitedOffset)
-		if err != nil {
-			//trouble writing committed offset
+	kafka.StorageMutex.Lock()
+	defer kafka.StorageMutex.Unlock()
+	for key, offset := range body.Offsets {
+		if err := PrettyWriteInt(kafka.Storage, fmtkey(commitPrefix, key), offset); err != nil {
 			return err
 		}
 	}
-	return nil
+
+	return kafka.Node.Reply(rawMsg, map[string]any{
+		"type": "commit_offsets_ok",
+	})
 }
 
-func (k *Kafka) ListCommittedOffsets(msg maelstrom.Message) error {
-	var body map[string]any
-	if err := json.Unmarshal(msg.Body, &body); err != nil {
+type ListCommitedOffsetsRPCBody struct {
+	Type string   `json:"type"`
+	Keys []string `json:"keys"`
+}
+
+func (kafka Kafka) ListCommittedOffsetsRPC(rawMsg maelstrom.Message) error {
+	var body ListCommitedOffsetsRPCBody
+	if err := json.Unmarshal(rawMsg.Body, &body); err != nil {
 		return err
 	}
-	keys := make([]string, 0)
-	if keyData, ok := body["keys"].([]interface{}); ok {
-		for _, key := range keyData {
-			if keyStr, ok := key.(string); ok {
-				keys = append(keys, keyStr)
-			} else {
-				return fmt.Errorf("invalid key type")
-			}
-		}
-	} else {
-		return fmt.Errorf("keys field not found or of wrong type")
-	}
-	offsets := make(map[string]int)
-	k.StorageMutex.Lock()
-	defer k.StorageMutex.Unlock()
-	for _, key := range keys {
-		value, err := PrettyReadInt(k.Storage, fmtkey(commitPrefix, key))
+	keyedOffsets := make(map[string]int)
+	kafka.StorageMutex.RLock()
+	defer kafka.StorageMutex.RUnlock()
+	for _, key := range body.Keys {
+		offset, err := PrettyReadInt(kafka.Storage, fmtkey(commitPrefix, key))
 		if err != nil {
-			continue // perhaps does not exist
+			continue
 		}
-
-		offsets[key] = value
+		keyedOffsets[key] = offset
 	}
-	return k.Node.Reply(msg, map[string]any{
+	return kafka.Node.Reply(rawMsg, map[string]any{
 		"type":    "list_committed_offsets_ok",
-		"offsets": offsets,
+		"offsets": keyedOffsets,
 	})
 }
 
